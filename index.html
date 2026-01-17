@@ -3,149 +3,164 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radio Globe Pro</title>
+    <title>Radio Pro: Spatial Clustering</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/globe.gl"></script>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; }
         
-        #loader {
+        #radar-status {
             position: fixed; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(0, 255, 136, 0.2); color: #00ff88;
-            padding: 8px 15px; border-radius: 20px; font-size: 12px;
-            border: 1px solid #00ff88; display: none;
+            background: rgba(0, 255, 136, 0.1); color: #00ff88;
+            padding: 8px 15px; border-radius: 20px; font-size: 11px;
+            border: 1px solid rgba(0, 255, 136, 0.5); display: none;
+            backdrop-filter: blur(5px); pointer-events: none;
         }
 
         #side-drawer {
             position: fixed; top: 0; left: -320px; width: 300px; height: 100%;
-            background: rgba(10, 10, 10, 0.95); z-index: 1002; transition: 0.3s;
+            background: rgba(10, 10, 10, 0.98); z-index: 1002; transition: 0.4s;
             display: flex; flex-direction: column; border-right: 1px solid #333;
-            color: white; backdrop-filter: blur(10px);
+            color: white;
         }
         #side-drawer.open { left: 0; }
 
-        #stations-list { flex: 1; overflow-y: auto; padding: 20px; margin-top: 40px; }
-        .city-name { font-size: 20px; color: #00ff88; font-weight: bold; margin-bottom: 15px; }
-        .station-item { 
-            padding: 12px; background: #1a1a1a; border-radius: 8px; 
-            margin-bottom: 8px; cursor: pointer; font-size: 14px; 
+        #stations-list { flex: 1; overflow-y: auto; padding: 20px; margin-top: 50px; }
+        .city-title { font-size: 22px; color: #00ff88; font-weight: bold; margin-bottom: 20px; border-bottom: 1px solid #222; padding-bottom: 10px; }
+        .station-card { 
+            padding: 12px; background: #1a1a1a; border-radius: 10px; 
+            margin-bottom: 10px; cursor: pointer; border: 1px solid #333;
+            transition: 0.2s;
         }
+        .station-card:active { border-color: #00ff88; background: #222; }
 
-        #player {
+        #player-ui {
             position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-            width: 85%; background: #111; padding: 15px; border-radius: 15px;
+            width: 85%; background: #111; padding: 15px; border-radius: 20px;
             display: none; z-index: 1003; border: 1px solid #444; color: white;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
     </style>
 </head>
 <body>
 
-    <div id="loader">Поиск городов...</div>
+    <div id="radar-status">РАДАР: СКАНИРОВАНИЕ...</div>
     <div id="globeViz"></div>
 
     <div id="side-drawer">
         <div id="stations-list"></div>
     </div>
 
-    <div id="player">
-        <div id="now-playing" style="font-size: 12px; margin-bottom: 8px; color: #00ff88;"></div>
-        <audio id="audio-player" controls style="width: 100%;"></audio>
+    <div id="player-ui">
+        <div id="track-info" style="font-size: 13px; margin-bottom: 10px; color: #00ff88; font-weight: bold;"></div>
+        <audio id="audio-node" controls style="width: 100%; height: 35px;"></audio>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready(); tg.expand();
 
-        let foundCities = new Map();
-        let searchCtrl = null;
+        let knownCities = []; // Массив объектов {lat, lng, name, id}
+        let abortCtrl = null;
 
-        // Инициализация Глобуса
         const world = Globe()(document.getElementById('globeViz'))
             .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
             .backgroundColor('#000000')
             .showAtmosphere(true)
-            // Настройка точек (WebGL слой)
             .pointsData([])
-            .pointRadius(0.7) // Фиксированный размер
+            .pointRadius(0.7)
             .pointColor(() => '#00ff88')
-            .pointAltitude(0) // Плоские точки
-            .pointLabel(d => d.name)
-            .onPointClick(d => openCity(d));
+            .pointAltitude(0)
+            .onPointClick(city => fetchFullCity(city));
 
-        // Границы масштаба
         const controls = world.controls();
-        controls.minDistance = 120; 
-        controls.maxDistance = 700;
+        controls.minDistance = 110; 
+        controls.maxDistance = 750;
         controls.enableDamping = true;
 
-        // Запуск поиска при движении
         controls.addEventListener('change', debounce(() => {
-            performMultiStepSearch();
-        }, 500));
+            runMultiStepRadar();
+        }, 700));
 
-        async function performMultiStepSearch() {
+        // Функция расчета расстояния между двумя координатами (км)
+        function getDist(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        async function runMultiStepRadar() {
             const { lat, lng } = world.pointOfView();
-            const loader = document.getElementById('loader');
+            const status = document.getElementById('radar-status');
             
-            if (searchCtrl) searchCtrl.abort();
-            searchCtrl = new AbortController();
+            if (abortCtrl) abortCtrl.abort();
+            abortCtrl = new AbortController();
 
-            loader.style.display = 'block';
+            status.style.display = 'block';
             
-            // 4 итерации: от 2000км до 100км
-            const steps = [2000, 800, 300, 100];
+            // Итерации: Сканируем от широкого радиуса к узкому
+            const steps = [2500, 1000, 400, 150, 50];
             
-            for (let radius of steps) {
-                if (searchCtrl.signal.aborted) break;
+            for (let i = 0; i < steps.length; i++) {
+                if (abortCtrl.signal.aborted) break;
                 
+                const radius = steps[i];
+                const offset = i * 100;
+
                 try {
-                    const url = `https://de1.api.radio-browser.info/json/stations/search?lat=${lat}&lon=${lng}&radius=${radius}&limit=60&hidebroken=true&order=clickcount&reverse=true`;
-                    const res = await fetch(url, { signal: searchCtrl.signal });
-                    const data = await res.json();
-                    
-                    data.forEach(s => {
-                        // Ключ по координатам, чтобы не дублировать точки в одном городе
-                        const key = `${s.geo_lat.toFixed(1)}_${s.geo_long.toFixed(1)}`;
-                        if (!foundCities.has(key)) {
-                            foundCities.set(key, {
+                    const url = `https://de1.api.radio-browser.info/json/stations/search?lat=${lat}&lon=${lng}&radius=${radius}&limit=100&offset=${offset}&hidebroken=true&order=clickcount&reverse=true`;
+                    const res = await fetch(url, { signal: abortCtrl.signal });
+                    const stations = await res.json();
+
+                    stations.forEach(s => {
+                        // ПРОВЕРКА: Есть ли уже город в радиусе 30км?
+                        const exists = knownCities.some(c => getDist(s.geo_lat, s.geo_long, c.lat, c.lng) < 30);
+                        
+                        if (!exists) {
+                            knownCities.push({
                                 lat: s.geo_lat,
                                 lng: s.geo_long,
-                                name: s.state || s.country || "Город",
+                                name: s.state || s.country || "Station",
                                 id: s.stationuuid
                             });
                         }
                     });
 
-                    // Обновляем точки на глобусе
-                    world.pointsData(Array.from(foundCities.values()));
-                    loader.innerText = `Найдено: ${foundCities.size} городов`;
+                    // Отображаем только уникальные города
+                    world.pointsData([...knownCities]);
+                    status.innerText = `ГОРОДОВ В ПАМЯТИ: ${knownCities.size || knownCities.length}`;
                     
                 } catch (e) {
                     if (e.name !== 'AbortError') console.error(e);
                 }
             }
-            loader.style.display = 'none';
+            status.style.display = 'none';
         }
 
-        async function openCity(city) {
+        async function fetchFullCity(city) {
             const list = document.getElementById('stations-list');
             document.getElementById('side-drawer').classList.add('open');
-            list.innerHTML = `<div class="city-name">${city.name}</div><div style="color: #666">Загрузка станций...</div>`;
+            list.innerHTML = `<div class="city-title">${city.name}</div><div style="color: #666">Загрузка всех станций...</div>`;
 
             try {
-                const res = await fetch(`https://de1.api.radio-browser.info/json/stations/search?lat=${city.lat}&lon=${city.lng}&radius=30&limit=100&hidebroken=true&order=clickcount&reverse=true`);
+                // Финальный запрос: всё в радиусе 30км для этого города
+                const res = await fetch(`https://de1.api.radio-browser.info/json/stations/search?lat=${city.lat}&lon=${city.lng}&radius=30&limit=150&hidebroken=true&order=clickcount&reverse=true`);
                 const stations = await res.json();
                 
-                list.innerHTML = `<div class="city-name">${city.name}</div>`;
+                list.innerHTML = `<div class="city-title">${city.name}</div>`;
                 stations.forEach(s => {
                     const div = document.createElement('div');
-                    div.className = 'station-item';
-                    div.innerText = s.name;
+                    div.className = 'station-card';
+                    div.innerHTML = `<strong>${s.name}</strong><br><small style="color:#888">${s.tags.split(',').slice(0,3).join(', ')}</small>`;
                     div.onclick = () => {
-                        const player = document.getElementById('player');
-                        const audio = document.getElementById('audio-player');
+                        const player = document.getElementById('player-ui');
+                        const audio = document.getElementById('audio-node');
                         player.style.display = 'block';
-                        document.getElementById('now-playing').innerText = `Эфир: ${s.name}`;
+                        document.getElementById('track-info').innerText = s.name;
                         audio.src = s.url_resolved.replace('http://', 'https://');
                         audio.play();
                     };
@@ -158,10 +173,10 @@
             let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f.apply(this, a), ms); };
         }
 
-        // Клик по глобусу закрывает меню
         world.onGlobeClick(() => document.getElementById('side-drawer').classList.remove('open'));
 
-        // Первый запуск при загрузке
-        setTimeout(performMultiStepSearch, 1000);
+        // Инициализация
+        setTimeout(runMultiStepRadar, 1000);
     </script>
 </body>
+</html>
