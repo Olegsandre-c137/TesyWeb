@@ -9,6 +9,7 @@
     <style>
         body { margin: 0; background: #000; color: white; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
         
+        /* Верхняя информационная панель */
         #status-bar {
             position: fixed; top: 0; width: 100%; background: rgba(0,0,0,0.9);
             padding: 12px; text-align: center; border-bottom: 1px solid #333; z-index: 1005; display: none;
@@ -16,41 +17,35 @@
         #status-city { font-size: 10px; text-transform: uppercase; color: #888; }
         #status-station { font-size: 14px; font-weight: bold; color: #ffa500; }
 
-        .station-dot {
-            width: 8px; height: 8px; background: #00ff88;
-            border-radius: 50%; cursor: pointer;
-            pointer-events: auto; transform: translate(-50%, -50%);
-            border: 1px solid rgba(0,0,0,0.5);
-            transition: background 0.3s, transform 0.3s;
-        }
-        /* Оранжевый цвет для выбранного города */
-        .station-dot.active { 
-            background: #ffa500 !important; 
-            width: 11px; height: 11px;
-            box-shadow: 0 0 10px #ffa500;
+        /* Кнопка меню */
+        #menu-btn { 
+            position: fixed; top: 65px; left: 15px; z-index: 1001; 
+            background: rgba(34, 34, 34, 0.9); border-radius: 50%; 
+            width: 44px; height: 44px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; border: 1px solid #444; color: white; 
         }
 
-        #menu-btn { position: fixed; top: 65px; left: 15px; z-index: 1001; background: #222; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid #444; }
-
+        /* Выдвижное меню (Drawer) */
         #side-drawer {
-            position: fixed; top: 0; left: -280px; width: 260px; height: 100%;
-            background: #0d0d0d; z-index: 1002; transition: 0.3s ease; 
+            position: fixed; top: 0; left: -300px; width: 280px; height: 100%;
+            background: #0d0d0d; z-index: 1002; transition: 0.4s cubic-bezier(0.4, 0, 0.2, 1); 
             display: flex; flex-direction: column; border-right: 1px solid #333;
         }
         #side-drawer.open { left: 0; }
         .drawer-header { padding: 20px; margin-top: 40px; }
-        #search-input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #444; background: #111; color: #fff; outline: none; }
+        #search-input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #444; background: #111; color: #fff; outline: none; box-sizing: border-box; }
 
+        /* Список станций */
         #stations-list { flex: 1; overflow-y: auto; padding: 10px; }
-        .city-group { margin-bottom: 8px; background: #1a1a1a; border-radius: 8px; border: 1px solid #333; }
-        .city-name { padding: 10px; font-size: 14px; font-weight: bold; color: #00ff88; border-bottom: 1px solid #222; }
-        .station-sub-item { padding: 12px 10px; font-size: 13px; border-top: 1px solid #222; color: #ccc; cursor: pointer; }
-        .station-sub-item:active { background: #333; }
+        .city-group-title { padding: 10px; font-size: 14px; font-weight: bold; color: #00ff88; border-bottom: 1px solid #222; margin-bottom: 5px; }
+        .station-sub-item { padding: 14px 10px; font-size: 13px; border-bottom: 1px solid #1a1a1a; color: #ccc; cursor: pointer; transition: 0.2s; }
+        .station-sub-item:active { background: #222; color: #ffa500; }
 
+        /* Контейнер плеера */
         #player-container {
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
             width: 85%; background: #111; padding: 15px; border-radius: 20px;
-            z-index: 1100; border: 1px solid #333; display: none;
+            z-index: 1100; border: 1px solid #333; display: none; backdrop-filter: blur(5px);
         }
         .controls-row { display: flex; align-items: center; gap: 10px; }
         input[type=range] { flex: 1; accent-color: #ffa500; }
@@ -64,7 +59,8 @@
         <div id="status-station">Загрузка...</div>
     </div>
 
-    <div id="menu-btn">☰</div>
+    <div id="menu-btn" onclick="toggleMenu()">☰</div>
+    
     <div id="globeViz"></div>
 
     <div id="side-drawer">
@@ -87,33 +83,33 @@
         const tg = window.Telegram.WebApp;
         tg.ready(); tg.expand();
 
-        let cityAtlas = []; // Хранит по 1 станции на город
+        let cityAtlas = [];
         let activeCityId = null; 
         const audioPlayer = document.getElementById('audio-player');
 
+        // Инициализация глобуса с использованием WebGL Points
         const world = Globe()(document.getElementById('globeViz'))
             .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
             .backgroundColor('#000000')
-            .showAtmosphere(false)
-            .htmlElementsData([])
-            .htmlElement(d => {
-                const el = document.createElement('div');
-                el.className = 'station-dot';
-                if (activeCityId === d.id) el.classList.add('active');
-                el.onclick = () => loadFullCityDetails(d);
-                return el;
-            });
+            .showAtmosphere(true)
+            .atmosphereColor('#1e4f8a')
+            .atmosphereAltitude(0.15)
+            .pointsData([])
+            .pointRadius(d => d.id === activeCityId ? 1.2 : 0.6)
+            .pointColor(d => d.id === activeCityId ? '#ffa500' : '#00ff88')
+            .pointAltitude(0.01)
+            .onPointClick(d => loadFullCityDetails(d));
 
-        // 1. ПЕРВОНАЧАЛЬНЫЙ ПОИСК (Топ станции для карты)
-        fetch('https://de1.api.radio-browser.info/json/stations/search?limit=800&has_geo_info=true&hidebroken=true&order=clickcount&reverse=true')
+        world.renderer().setPixelRatio(window.devicePixelRatio);
+
+        // Загрузка первичного списка городов (по 1 станции)
+        fetch('https://de1.api.radio-browser.info/json/stations/search?limit=1000&has_geo_info=true&hidebroken=true&order=clickcount&reverse=true')
             .then(res => res.json())
             .then(data => {
                 const uniqueCities = new Map();
-
                 data.forEach(s => {
-                    // Нормализация названия города для объединения (Moscow/Москва)
                     const rawName = (s.state || s.country || 'Unknown').toLowerCase();
-                    const normName = rawName.includes('mosc') || rawName.includes('моск') ? 'moscow' : rawName;
+                    const normName = (rawName.includes('mosc') || rawName.includes('моск')) ? 'moscow' : rawName;
                     
                     if (!uniqueCities.has(normName)) {
                         uniqueCities.set(normName, {
@@ -125,50 +121,43 @@
                         });
                     }
                 });
-
                 cityAtlas = Array.from(uniqueCities.values());
-                world.htmlElementsData(cityAtlas);
+                world.pointsData(cityAtlas);
             });
 
-        // 2. ЗАГРУЗКА ВСЕХ СТАНЦИЙ ГОРОДА ПРИ ВЫБОРЕ
+        // Функция загрузки всех станций при выборе города
         async function loadFullCityDetails(cityObj) {
             activeCityId = cityObj.id;
-            world.htmlElementsData([...cityAtlas]); // Обновляем цвета точек
+            world.pointsData([...cityAtlas]); // Перекрашиваем точку
 
+            // Приближаем камеру
             world.pointOfView({ lat: cityObj.lat, lng: cityObj.lng, alt: 1.2 }, 600);
             
-            const list = document.getElementById('stations-list');
-            list.innerHTML = '<div style="padding:20px; text-align:center;">Загрузка станций...</div>';
+            // Открываем левое меню
             document.getElementById('side-drawer').classList.add('open');
+            
+            const list = document.getElementById('stations-list');
+            list.innerHTML = '<div style="padding:20px; text-align:center; color:#888;">Загрузка списка...</div>';
 
             try {
-                // Поиск всех станций в радиусе координат выбранной точки
-                const res = await fetch(`https://de1.api.radio-browser.info/json/stations/search?lat=${cityObj.lat}&lon=${cityObj.lng}&radius=50&limit=100&hidebroken=true&order=clickcount&reverse=true`);
+                const res = await fetch(`https://de1.api.radio-browser.info/json/stations/search?lat=${cityObj.lat}&lon=${cityObj.lng}&radius=50&limit=150&hidebroken=true&order=clickcount&reverse=true`);
                 const stations = await res.json();
-                
                 renderCityStations(cityObj.city, stations);
             } catch (e) {
-                list.innerHTML = '<div style="padding:20px; color:red;">Ошибка загрузки</div>';
+                list.innerHTML = '<div style="padding:20px; color:#ff4444;">Ошибка API</div>';
             }
         }
 
         function renderCityStations(cityName, stations) {
             const list = document.getElementById('stations-list');
-            list.innerHTML = '';
-            
-            const groupDiv = document.createElement('div');
-            groupDiv.className = 'city-group';
-            groupDiv.innerHTML = `<div class="city-name">${cityName}</div>`;
-            
+            list.innerHTML = `<div class="city-group-title">${cityName}</div>`;
             stations.forEach(s => {
                 const sDiv = document.createElement('div');
                 sDiv.className = 'station-sub-item';
                 sDiv.innerText = s.name;
                 sDiv.onclick = () => play(s, cityName);
-                groupDiv.appendChild(sDiv);
+                list.appendChild(sDiv);
             });
-            
-            list.appendChild(groupDiv);
         }
 
         function play(s, cityName) {
@@ -176,38 +165,48 @@
             document.getElementById('status-city').innerText = cityName;
             document.getElementById('status-station').innerText = s.name;
             
+            // Замена http на https для работы в Telegram WebApp
             audioPlayer.src = s.url_resolved.replace('http://', 'https://');
             document.getElementById('player-container').style.display = 'block';
-            audioPlayer.play();
+            audioPlayer.play().catch(e => console.log("Playback error"));
             
-            if (window.innerWidth < 600) document.getElementById('side-drawer').classList.remove('open');
+            // Закрываем меню после выбора станции на мобильных устройствах
+            if (window.innerWidth < 600) {
+                document.getElementById('side-drawer').classList.remove('open');
+            }
         }
 
-        // Поиск по атласу городов
+        function toggleMenu() {
+            document.getElementById('side-drawer').classList.toggle('open');
+        }
+
+        // Поиск по списку городов
         document.getElementById('search-input').oninput = (e) => {
             const val = e.target.value.toLowerCase();
+            if (val.length < 2) return;
+            
             const filtered = cityAtlas.filter(c => c.city.toLowerCase().includes(val) || c.normName.includes(val));
-            // В списке поиска показываем города
             const list = document.getElementById('stations-list');
-            list.innerHTML = '';
+            list.innerHTML = '<div class="city-group-title">РЕЗУЛЬТАТЫ ПОИСКА</div>';
             filtered.forEach(c => {
                 const div = document.createElement('div');
                 div.className = 'station-sub-item';
-                div.style.border = "none";
+                div.style.color = '#00ff88';
                 div.innerText = '📍 ' + c.city;
                 div.onclick = () => loadFullCityDetails(c);
                 list.appendChild(div);
             });
         };
 
-        document.getElementById('volume-control').oninput = (e) => { audioPlayer.volume = e.target.value; };
+        // Управление звуком и таймером
+        document.getElementById('volume-control').oninput = (e) => audioPlayer.volume = e.target.value;
         audioPlayer.ontimeupdate = () => {
             const m = Math.floor(audioPlayer.currentTime / 60);
             const s = Math.floor(audioPlayer.currentTime % 60);
             document.getElementById('time-display').innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
         };
 
-        document.getElementById('menu-btn').onclick = () => document.getElementById('side-drawer').classList.toggle('open');
+        // Закрытие меню при клике на глобус
         world.onGlobeClick(() => document.getElementById('side-drawer').classList.remove('open'));
     </script>
 </body>
