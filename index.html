@@ -1,229 +1,96 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radio Pro Max</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://unpkg.com/globe.gl"></script>
-    <style>
-        body { margin: 0; background: #000; color: white; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
-        
-        /* Верхняя панель */
-        #status-bar {
-            position: fixed; top: 0; width: 100%; background: rgba(0,0,0,0.9);
-            padding: 12px; text-align: center; border-bottom: 1px solid #333; z-index: 1005; display: none;
+// 1. ХРАНИЛИЩЕ ДАННЫХ
+let regionCache = []; // Крупные точки (страны/регионы)
+let cityCache = new Map(); // Кэш городов: { "lat_lng": { cityData } }
+let activeCityId = null;
+
+// 2. ИНИЦИАЛИЗАЦИЯ ГЛОБУСА
+const world = Globe()(document.getElementById('globeViz'))
+    .pointsData([])
+    .pointRadius(d => d.type === 'cluster' ? 2.0 : 0.8)
+    .pointColor(d => {
+        if (d.id === activeCityId) return '#ffa500'; // Выбранный город
+        return d.type === 'cluster' ? '#007bff' : '#00ff88'; // Кластер vs Город
+    })
+    .onPointClick(d => {
+        if (d.type === 'cluster') {
+            // При клике на регион — приближаем камеру для уточнения городов
+            world.pointOfView({ lat: d.lat, lng: d.lng, alt: 0.7 }, 800);
+        } else {
+            // При клике на город — загружаем станции
+            loadStationsForCity(d);
         }
-        #status-city { font-size: 10px; text-transform: uppercase; color: #888; }
-        #status-station { font-size: 14px; font-weight: bold; color: #ffa500; }
+    });
 
-        /* Кнопки */
-        .ui-btn { 
-            position: fixed; z-index: 1001; background: #222; border-radius: 50%; 
-            width: 44px; height: 44px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; border: 1px solid #444; color: white; 
-        }
-        #menu-btn { top: 65px; left: 15px; }
-        #geo-btn { top: 65px; right: 15px; }
+// 3. ПЕРВОНАЧАЛЬНАЯ ЗАГРУЗКА (УРОВЕНЬ 1)
+// Запрашиваем топ-500 станций мира, чтобы просто пометить "живые" зоны
+fetch('https://de1.api.radio-browser.info/json/stations/search?limit=500&has_geo_info=true&hidebroken=true&order=clickcount&reverse=true')
+    .then(r => r.json())
+    .then(data => {
+        // Группируем их по странам для начального отображения
+        const clusters = new Map();
+        data.forEach(s => {
+            const key = s.countrycode;
+            if (!clusters.has(key)) {
+                clusters.set(key, { lat: s.geo_lat, lng: s.geo_long, type: 'cluster', id: key });
+            }
+        });
+        regionCache = Array.from(clusters.values());
+        world.pointsData(regionCache);
+    });
 
-        /* Левое меню */
-        #side-drawer {
-            position: fixed; top: 0; left: -300px; width: 280px; height: 100%;
-            background: #0d0d0d; z-index: 1002; transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-            display: flex; flex-direction: column; border-right: 1px solid #333;
-        }
-        #side-drawer.open { left: 0; }
-        .drawer-header { padding: 20px; margin-top: 40px; }
-        #search-input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #444; background: #111; color: #fff; outline: none; box-sizing: border-box; }
-
-        /* Список */
-        #stations-list { flex: 1; overflow-y: auto; padding: 10px; }
-        .list-header { padding: 10px; font-size: 16px; color: #00ff88; font-weight: bold; border-bottom: 1px solid #222; margin-bottom: 5px; }
-        .station-item { padding: 14px 10px; font-size: 13px; border-bottom: 1px solid #1a1a1a; color: #ccc; cursor: pointer; }
-        .station-item:active { background: #222; color: #ffa500; }
-
-        /* Плеер */
-        #player-container {
-            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-            width: 85%; background: #111; padding: 15px; border-radius: 20px;
-            z-index: 1100; border: 1px solid #333; display: none;
-        }
-        input[type=range] { flex: 1; accent-color: #ffa500; cursor: pointer; }
-    </style>
-</head>
-<body>
-
-    <div id="status-bar">
-        <div id="status-city">ГОРОД</div>
-        <div id="status-station">Название</div>
-    </div>
-
-    <div id="menu-btn" class="ui-btn" onclick="toggleMenu()">☰</div>
-    <div id="geo-btn" class="ui-btn" onclick="goToMe()">📍</div>
+// 4. ДИНАМИЧЕСКОЕ УТОЧНЕНИЕ (УРОВЕНЬ 2)
+// Следим за камерой: если мы близко, подгружаем реальные города
+world.controls().addEventListener('change', debounce(() => {
+    const { alt, lat, lng } = world.pointOfView();
     
-    <div id="globeViz"></div>
+    if (alt < 1.0) {
+        // Запрашиваем города в текущем радиусе видимости
+        fetchCitiesInArea(lat, lng, alt * 500); 
+    } else {
+        // Возвращаемся к глобальным кластерам
+        world.pointsData(regionCache);
+    }
+}, 300));
 
-    <div id="side-drawer">
-        <div class="drawer-header"><input type="text" id="search-input" placeholder="Поиск города..."></div>
-        <div id="stations-list"></div>
-    </div>
-
-    <div id="player-container">
-        <div style="display:flex; align-items:center; gap:10px;">
-            <span>🔈</span>
-            <input type="range" id="volume-control" min="0" max="1" step="0.01" value="0.8">
-            <div id="time" style="font-size:12px; font-family:monospace; color:#888;">00:00</div>
-        </div>
-        <audio id="audio-player"></audio>
-    </div>
-
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.ready(); tg.expand();
-
-        let allPoints = []; // Основная база городов
-        let activePointId = null;
-        const audio = document.getElementById('audio-player');
-
-        // Инициализация глобуса
-        const world = Globe()(document.getElementById('globeViz'))
-            .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
-            .backgroundColor('#000000')
-            .showAtmosphere(true)
-            .pointsData([])
-            .pointRadius(d => d.isCluster ? 2.5 : (d.id === activePointId ? 1.4 : 0.8))
-            .pointColor(d => {
-                if (d.id === activePointId) return '#ffa500'; // Оранжевый для выбранного
-                return d.isCluster ? '#007bff' : '#00ff88';   // Синий для кластеров, зеленый для городов
-            })
-            .pointAltitude(0.01)
-            .onPointClick(d => {
-                if (d.isCluster) {
-                    const current = world.pointOfView();
-                    world.pointOfView({ lat: d.lat, lng: d.lng, alt: current.alt * 0.6 }, 800);
-                } else {
-                    selectCity(d);
-                }
+async function fetchCitiesInArea(lat, lng, radius) {
+    // search по координатам и радиусу, но с лимитом, чтобы не тянуть лишнее
+    const url = `https://de1.api.radio-browser.info/json/stations/search?lat=${lat}&lon=${lng}&radius=${radius}&limit=200&hidebroken=true`;
+    const res = await fetch(url);
+    const data = await res.json();
+    
+    const cities = new Map();
+    data.forEach(s => {
+        const key = `${s.geo_lat.toFixed(1)}_${s.geo_long.toFixed(1)}`;
+        if (!cities.has(key)) {
+            cities.set(key, {
+                id: s.stationuuid,
+                lat: s.geo_lat,
+                lng: s.geo_long,
+                city: s.state || s.country || 'Unknown',
+                type: 'city'
             });
-
-        // Ограничения масштаба
-        const ctrl = world.controls();
-        ctrl.minDistance = 160;
-        ctrl.maxDistance = 480;
-        ctrl.addEventListener('change', () => debounce(refreshDisplay, 150)());
-
-        // 1. Загрузка уникальных городов (по одной топовой станции)
-        fetch('https://de1.api.radio-browser.info/json/stations/search?limit=1000&has_geo_info=true&hidebroken=true&order=clickcount&reverse=true')
-            .then(r => r.json())
-            .then(data => {
-                const unique = new Map();
-                data.forEach(s => {
-                    const key = `${s.geo_lat.toFixed(2)}_${s.geo_long.toFixed(2)}`;
-                    if (!unique.has(key)) {
-                        unique.set(key, {
-                            id: s.stationuuid,
-                            lat: s.geo_lat,
-                            lng: s.geo_long,
-                            city: s.state || s.country || 'Unknown'
-                        });
-                    }
-                });
-                allPoints = Array.from(unique.values());
-                refreshDisplay();
-            });
-
-        // 2. Логика кластеризации и отрисовки
-        function refreshDisplay() {
-            const { alt } = world.pointOfView();
-            const threshold = alt * 12; // Радиус захвата в кластер
-            const visiblePoints = [];
-            const used = new Set();
-
-            for (let i = 0; i < allPoints.length; i++) {
-                if (used.has(i)) continue;
-                let cluster = [allPoints[i]];
-                used.add(i);
-
-                if (alt > 1.1) { // Кластеризуем только на большом отдалении
-                    for (let j = i + 1; j < allPoints.length; j++) {
-                        if (used.has(j)) continue;
-                        const dist = Math.sqrt(Math.pow(allPoints[i].lat - allPoints[j].lat, 2) + Math.pow(allPoints[i].lng - allPoints[j].lng, 2));
-                        if (dist < threshold) {
-                            cluster.push(allPoints[j]);
-                            used.add(j);
-                        }
-                    }
-                }
-
-                if (cluster.length > 3 && alt > 1.1) {
-                    visiblePoints.push({ lat: cluster[0].lat, lng: cluster[0].lng, isCluster: true, count: cluster.length });
-                } else {
-                    visiblePoints.push({ ...cluster[0], isCluster: false });
-                }
-            }
-            world.pointsData(visiblePoints);
         }
+    });
+    world.pointsData(Array.from(cities.values()));
+}
 
-        // 3. Выбор города и загрузка ЕГО станций
-        async function selectCity(d) {
-            activePointId = d.id;
-            refreshDisplay(); // Обновляем цвета на глобусе
-            
-            world.pointOfView({ lat: d.lat, lng: d.lng, alt: 0.8 }, 600);
-            
-            const list = document.getElementById('stations-list');
-            document.getElementById('side-drawer').classList.add('open');
-            list.innerHTML = '<div style="padding:20px; text-align:center; color:#666;">Поиск станций в этом месте...</div>';
+// 5. ПОДГРУЗКА ВСЕХ СТАНЦИЙ (УРОВЕНЬ 3)
+async function loadStationsForCity(city) {
+    activeCityId = city.id;
+    document.getElementById('side-drawer').classList.add('open');
+    const list = document.getElementById('stations-list');
+    list.innerHTML = 'Загрузка всех станций...';
 
-            try {
-                // Запрос станций строго по координатам этого города
-                const res = await fetch(`https://de1.api.radio-browser.info/json/stations/search?lat=${d.lat}&lon=${d.lng}&radius=40&limit=100&hidebroken=true&order=clickcount&reverse=true`);
-                const stations = await res.json();
-                
-                list.innerHTML = `<div class="list-header">${d.city}</div>`;
-                if(stations.length === 0) list.innerHTML += '<div style="padding:10px;">Ничего не найдено</div>';
-
-                stations.forEach(s => {
-                    const item = document.createElement('div');
-                    item.className = 'station-item';
-                    item.innerText = s.name;
-                    item.onclick = () => playStation(s, d.city);
-                    list.appendChild(item);
-                });
-            } catch (e) { list.innerHTML = 'Ошибка загрузки'; }
-        }
-
-        function playStation(s, cityName) {
-            document.getElementById('status-bar').style.display = 'block';
-            document.getElementById('status-city').innerText = cityName;
-            document.getElementById('status-station').innerText = s.name;
-            audio.src = s.url_resolved.replace('http://', 'https://');
-            document.getElementById('player-container').style.display = 'block';
-            audio.play();
-            if (window.innerWidth < 600) toggleMenu();
-        }
-
-        function toggleMenu() { document.getElementById('side-drawer').classList.toggle('open'); }
-        
-        function goToMe() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(p => {
-                    world.pointOfView({ lat: p.coords.latitude, lng: p.coords.longitude, alt: 0.8 }, 1000);
-                });
-            }
-        }
-
-        function debounce(f, ms) {
-            let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f.apply(this, a), ms); };
-        }
-
-        audio.ontimeupdate = () => {
-            const m = Math.floor(audio.currentTime / 60);
-            const s = Math.floor(audio.currentTime % 60);
-            document.getElementById('time').innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
-        };
-        document.getElementById('volume-control').oninput = (e) => audio.volume = e.target.value;
-        world.onGlobeClick(() => document.getElementById('side-drawer').classList.remove('open'));
-    </script>
-</body>
-</html>
+    // Запрос всех станций конкретно в этой точке (малый радиус)
+    const res = await fetch(`https://de1.api.radio-browser.info/json/stations/search?lat=${city.lat}&lon=${city.lng}&radius=20&hidebroken=true&order=clickcount&reverse=true`);
+    const stations = await res.json();
+    
+    list.innerHTML = `<div class="list-header">${city.city}</div>`;
+    stations.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'station-item';
+        item.innerText = s.name;
+        item.onclick = () => play(s, city.city);
+        list.appendChild(item);
+    });
+}
