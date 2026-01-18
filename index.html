@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Radio Pro Lite + Scanner + GPT</title>
+<title>Radio Globe Lite</title>
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://unpkg.com/globe.gl"></script>
@@ -12,25 +12,22 @@
 body {
   margin: 0;
   background: #000;
-  color: white;
+  color: #fff;
   font-family: -apple-system, system-ui, sans-serif;
   overflow: hidden;
 }
-
 #scanner-info {
   position: fixed;
   top: 15px;
   right: 15px;
-  background: rgba(0,255,136,0.2);
+  background: rgba(0,255,136,0.15);
   color: #00ff88;
   padding: 5px 12px;
-  border-radius: 15px;
+  border-radius: 14px;
   font-size: 10px;
   font-weight: bold;
-  z-index: 1001;
-  border: 1px solid rgba(0,255,136,0.3);
+  z-index: 10;
 }
-
 .station-dot {
   width: 7px;
   height: 7px;
@@ -40,112 +37,74 @@ body {
   border: 1px solid rgba(0,0,0,0.5);
   cursor: pointer;
 }
-
 .station-dot.cluster {
   background: #2aa;
   width: 10px;
   height: 10px;
 }
-
-.station-dot.active {
-  background: #ffa500 !important;
-  width: 10px;
-  height: 10px;
-  z-index: 1000;
-}
-
-#menu-btn {
-  position: fixed;
-  top: 65px;
-  left: 15px;
-  z-index: 1001;
-  background: #222;
-  border-radius: 50%;
-  width: 44px;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border: 1px solid #444;
-}
-
-#side-drawer {
+#drawer {
   position: fixed;
   top: 0;
   left: -280px;
   width: 260px;
   height: 100%;
   background: #0d0d0d;
-  z-index: 1002;
-  transition: 0.3s ease;
-  display: flex;
-  flex-direction: column;
+  transition: 0.3s;
+  z-index: 20;
   border-right: 1px solid #333;
 }
-#side-drawer.open { left: 0; }
-
-.drawer-header { padding: 20px; margin-top: 40px; }
-#search-input {
-  width: 100%;
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid #444;
-  background: #111;
-  color: #fff;
-}
-
-#stations-list { flex: 1; overflow-y: auto; padding: 10px; }
-
-.city-group {
-  margin-bottom: 8px;
-  background: #1a1a1a;
-  border-radius: 8px;
-  border: 1px solid #333;
-}
-
-.city-name {
-  padding: 10px;
+#drawer.open { left: 0; }
+#drawer h3 {
+  margin: 16px;
   font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
 }
-
-.station-sub-item {
+#stations {
   padding: 10px;
-  font-size: 12px;
-  border-top: 1px solid #222;
-  color: #bbb;
+}
+.station {
+  padding: 10px;
+  border-bottom: 1px solid #222;
   cursor: pointer;
 }
-.station-sub-item:hover { background: #222; color: #fff; }
+.station:hover { background: #222; }
 </style>
 </head>
 
 <body>
 
 <div id="scanner-info">ГОРОДОВ: 0</div>
-<div id="menu-btn">☰</div>
 <div id="globeViz"></div>
 
-<div id="side-drawer">
-  <div class="drawer-header">
-    <input id="search-input" placeholder="Поиск города">
-  </div>
-  <div id="stations-list"></div>
+<div id="drawer">
+  <h3 id="drawer-title">Город</h3>
+  <div id="stations"></div>
 </div>
 
-<audio id="audio-player"></audio>
+<audio id="audio"></audio>
 
 <script>
+/* =========================
+   INIT
+========================= */
 const tg = window.Telegram.WebApp;
 tg.ready(); tg.expand();
 
-let allGroups = [];
-let offset = 0;
-let currentActiveGroupKey = null;
+const audio = document.getElementById('audio');
+const drawer = document.getElementById('drawer');
+const drawerTitle = document.getElementById('drawer-title');
+const stationsBox = document.getElementById('stations');
 
+let offset = 0;
+const cities = [];
+const cityMap = new Map(); // key -> city
+let visibleCities = [];
+
+const CITY_RADIUS = 0.3; // ~30 км
+const CLUSTER_PX = 24;
+
+/* =========================
+   GLOBE
+========================= */
 const world = Globe()(document.getElementById('globeViz'))
   .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
   .backgroundColor('#000')
@@ -154,13 +113,10 @@ const world = Globe()(document.getElementById('globeViz'))
   .htmlElement(d => {
     const el = document.createElement('div');
     el.className = 'station-dot';
-    if (d.isCluster) el.classList.add('cluster');
-
-    const key = (d.city + d.lat).toLowerCase();
-    if (key === currentActiveGroupKey) el.classList.add('active');
+    if (d.cluster) el.classList.add('cluster');
 
     el.onclick = () => {
-      if (d.isCluster) {
+      if (d.cluster) {
         world.pointOfView(
           { lat: d.lat, lng: d.lng, alt: world.pointOfView().alt * 0.6 },
           600
@@ -172,12 +128,15 @@ const world = Globe()(document.getElementById('globeViz'))
     return el;
   });
 
-world.controls().autoRotate = false;
 world.renderer().setPixelRatio(window.devicePixelRatio);
+world.controls().autoRotate = false;
 
-/* ===== OPTIMIZATION ===== */
-
-const CLUSTER_SIZE = 24;
+/* =========================
+   GEO / MATH
+========================= */
+function dist(a, b, c, d) {
+  return Math.sqrt((a - c) ** 2 + (b - d) ** 2);
+}
 
 function isVisible(lat, lng) {
   const cam = world.camera().position;
@@ -186,36 +145,47 @@ function isVisible(lat, lng) {
   const x = Math.cos(phi) * Math.cos(theta);
   const y = Math.sin(phi);
   const z = Math.cos(phi) * Math.sin(theta);
-  return (x*cam.x + y*cam.y + z*cam.z) > 0;
+  return (x * cam.x + y * cam.y + z * cam.z) > 0;
 }
 
-function buildClusters() {
+/* =========================
+   CLUSTERING
+========================= */
+function updateVisible() {
   const map = new Map();
   const cam = world.camera();
   const r = world.renderer().domElement;
 
-  allGroups.forEach(g => {
-    if (!isVisible(g.lat, g.lng)) return;
-    const v = world.getCoords(g.lat, g.lng);
+  cities.forEach(c => {
+    if (!isVisible(c.lat, c.lng)) return;
+
+    const phi = (90 - c.lat) * Math.PI / 180;
+    const theta = (c.lng + 180) * Math.PI / 180;
+
+    const v = new THREE.Vector3(
+      Math.sin(phi) * Math.cos(theta),
+      Math.cos(phi),
+      Math.sin(phi) * Math.sin(theta)
+    );
+
     v.project(cam);
 
     const x = (v.x * 0.5 + 0.5) * r.width;
     const y = (-v.y * 0.5 + 0.5) * r.height;
 
-    const gx = Math.floor(x / CLUSTER_SIZE);
-    const gy = Math.floor(y / CLUSTER_SIZE);
+    const gx = Math.floor(x / CLUSTER_PX);
+    const gy = Math.floor(y / CLUSTER_PX);
     const key = gx + ':' + gy;
 
     if (!map.has(key)) {
-      map.set(key, { ...g, isCluster: false, count: 1 });
+      map.set(key, { ...c, cluster: false });
     } else {
-      const c = map.get(key);
-      c.isCluster = true;
-      c.count++;
+      map.get(key).cluster = true;
     }
   });
 
-  world.htmlElementsData([...map.values()]);
+  visibleCities = [...map.values()];
+  world.htmlElementsData(visibleCities);
 }
 
 let raf = false;
@@ -223,80 +193,88 @@ world.controls().addEventListener('change', () => {
   if (raf) return;
   raf = true;
   requestAnimationFrame(() => {
-    buildClusters();
+    updateVisible();
     raf = false;
   });
 });
 
-/* ===== DATA SCAN ===== */
-
+/* =========================
+   SCANNER (CITIES ONLY)
+========================= */
 async function scan() {
-  const res = await fetch(
-    `https://de1.api.radio-browser.info/json/stations/search?limit=1000&offset=${offset}&has_geo_info=true`
-  );
-  const data = await res.json();
-  if (!data || !data.length) return;
-
-  data.forEach(s => {
-    const lat = parseFloat(s.geo_lat);
-    const lng = parseFloat(s.geo_long);
-    const city = s.state || s.country || 'Unknown';
-
-    let g = allGroups.find(x =>
-      Math.abs(x.lat - lat) < 0.3 &&
-      Math.abs(x.lng - lng) < 0.3
+  try {
+    const res = await fetch(
+      `https://de1.api.radio-browser.info/json/stations/search?limit=1000&offset=${offset}&has_geo_info=true`
     );
-
-    if (!g) {
-      allGroups.push({ city, lat, lng, stations: [s] });
-    } else if (!g.stations.find(st => st.stationuuid === s.stationuuid)) {
-      g.stations.push(s);
+    const list = await res.json();
+    if (!list || !list.length) {
+      offset = 0;
+      return;
     }
-  });
 
-  document.getElementById('scanner-info').innerText =
-    `ГОРОДОВ: ${allGroups.length}`;
+    list.forEach(s => {
+      const lat = +s.geo_lat;
+      const lng = +s.geo_long;
+      if (isNaN(lat) || isNaN(lng)) return;
 
-  buildClusters();
-  offset += 1000;
+      // проверка: есть ли город рядом
+      for (const c of cities) {
+        if (dist(lat, lng, c.lat, c.lng) < CITY_RADIUS) return;
+      }
+
+      const key = `${Math.round(lat * 10)}_${Math.round(lng * 10)}`;
+      if (cityMap.has(key)) return;
+
+      const city = {
+        lat,
+        lng,
+        name: s.state || s.country || 'Unknown'
+      };
+
+      cityMap.set(key, city);
+      cities.push(city);
+    });
+
+    document.getElementById('scanner-info').innerText =
+      `ГОРОДОВ: ${cities.length}`;
+
+    updateVisible();
+    offset += list.length;
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 scan();
 setInterval(scan, 4000);
 
-/* ===== UI ===== */
+/* =========================
+   CITY CLICK → LOAD STATIONS
+========================= */
+async function openCity(city) {
+  drawer.classList.add('open');
+  drawerTitle.innerText = city.name;
+  stationsBox.innerHTML = 'Загрузка...';
 
-function openCity(g) {
-  currentActiveGroupKey = (g.city + g.lat).toLowerCase();
-  world.pointOfView({ lat: g.lat, lng: g.lng, alt: 1.2 }, 600);
-  renderList([g]);
-  document.getElementById('side-drawer').classList.add('open');
-}
+  world.pointOfView({ lat: city.lat, lng: city.lng, alt: 1.2 }, 600);
 
-function renderList(data) {
-  const list = document.getElementById('stations-list');
-  list.innerHTML = '';
-  data.forEach(g => {
+  const res = await fetch(
+    `https://de1.api.radio-browser.info/json/stations/bygeo?lat=${city.lat}&lng=${city.lng}&radius=30`
+  );
+  const list = await res.json();
+
+  stationsBox.innerHTML = '';
+  list.forEach(s => {
     const div = document.createElement('div');
-    div.className = 'city-group';
-    div.innerHTML = `<div class="city-name">${g.city}</div>`;
-    g.stations.forEach(s => {
-      const si = document.createElement('div');
-      si.className = 'station-sub-item';
-      si.innerText = s.name;
-      si.onclick = () => {
-        const audio = document.getElementById('audio-player');
-        audio.src = s.url_resolved.replace('http://','https://');
-        audio.play();
-      };
-      div.appendChild(si);
-    });
-    list.appendChild(div);
+    div.className = 'station';
+    div.innerText = s.name;
+    div.onclick = () => {
+      audio.src = s.url_resolved.replace('http://','https://');
+      audio.play();
+    };
+    stationsBox.appendChild(div);
   });
 }
-
-document.getElementById('menu-btn').onclick = () =>
-  document.getElementById('side-drawer').classList.toggle('open');
 </script>
 
 </body>
