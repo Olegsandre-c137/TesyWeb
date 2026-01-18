@@ -3,33 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radio Pro Max HTML</title>
+    <title>Radio Pro Max: Cluster Fix</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/globe.gl"></script>
     <style>
         body { margin: 0; background: #000; color: white; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; }
         
         #status-bar {
-            position: fixed; top: 0; width: 100%; background: rgba(0,0,0,0.9);
+            position: fixed; top: 0; width: 100%; background: rgba(0,0,0,0.95);
             padding: 12px; text-align: center; border-bottom: 1px solid #333; z-index: 1005; display: none;
+            backdrop-filter: blur(5px);
         }
-        #status-city { font-size: 10px; text-transform: uppercase; color: #888; }
+        #status-city { font-size: 10px; text-transform: uppercase; color: #888; letter-spacing: 1px; }
         #status-station { font-size: 14px; font-weight: bold; color: #00ff88; }
 
         #scanner-info {
-            position: fixed; top: 15px; right: 15px; background: rgba(0,255,136,0.15);
+            position: fixed; top: 15px; right: 15px; background: rgba(0,255,136,0.1);
             color: #00ff88; padding: 5px 12px; border-radius: 15px; font-size: 10px;
-            font-weight: bold; z-index: 1001; border: 1px solid rgba(0,255,136,0.3);
+            font-weight: bold; z-index: 1001; border: 1px solid rgba(0,255,136,0.2);
         }
 
         /* Стили маркеров */
-        .station-dot {
-            width: 8px; height: 8px; border-radius: 50%; cursor: pointer;
-            transform: translate(-50%, -50%); border: 1px solid rgba(0,0,0,0.5);
-            transition: all 0.2s ease;
+        .dot {
+            border-radius: 50%; cursor: pointer; transform: translate(-50%, -50%);
+            border: 1px solid rgba(0,0,0,0.5); transition: background 0.2s;
         }
-        .dot-city { background: #00ff88; box-shadow: 0 0 8px #00ff88; }
-        .dot-cluster { background: #007bff; width: 12px; height: 12px; box-shadow: 0 0 10px #007bff; }
+        .dot-city { width: 8px; height: 8px; background: #00ff88; box-shadow: 0 0 6px #00ff88; }
+        .dot-cluster { width: 14px; height: 14px; background: #007bff; box-shadow: 0 0 10px #007bff; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: bold; color: white; }
         .dot-active { background: #ffa500 !important; width: 12px; height: 12px; box-shadow: 0 0 15px #ffa500; z-index: 1000; }
 
         #menu-btn { position: fixed; top: 65px; left: 15px; z-index: 1001; background: #222; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid #444; }
@@ -46,9 +46,9 @@
         #stations-list { flex: 1; overflow-y: auto; padding: 10px; }
         .city-group { margin-bottom: 8px; background: #161616; border-radius: 10px; border: 1px solid #222; overflow: hidden; }
         .city-name { padding: 12px; font-size: 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-        .city-name small { background: #333; color: #00ff88; padding: 2px 6px; border-radius: 8px; font-size: 10px; }
+        .city-name small { background: #00ff88; color: #000; padding: 2px 6px; border-radius: 8px; font-size: 10px; font-weight: bold; }
         .station-sub-item { padding: 12px; font-size: 13px; border-top: 1px solid #222; color: #aaa; display: none; cursor: pointer; }
-        .city-group.active .station-sub-item { display: block; background: #111; }
+        .city-group.active .station-sub-item { display: block; background: #0f0f0f; }
 
         #player-container {
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -56,8 +56,8 @@
             z-index: 1100; border: 1px solid #333; display: none; box-sizing: border-box;
         }
         .controls-row { display: flex; align-items: center; gap: 12px; }
-        input[type=range] { flex: 1; accent-color: #ffa500; cursor: pointer; }
-        #time-display { font-size: 12px; font-family: monospace; min-width: 45px; color: #888; }
+        input[type=range] { flex: 1; accent-color: #00ff88; cursor: pointer; }
+        #time-display { font-size: 12px; font-family: monospace; min-width: 40px; color: #888; }
     </style>
 </head>
 <body>
@@ -103,154 +103,129 @@
             .htmlElementsData([])
             .htmlElement(d => {
                 const el = document.createElement('div');
-                el.className = `station-dot ${d.type === 'cluster' ? 'dot-cluster' : 'dot-city'}`;
-                
                 const groupKey = (d.city + d.lat).toLowerCase();
-                if (currentActiveGroupKey === groupKey) el.classList.add('dot-active');
                 
-                el.onclick = () => {
-                    if (d.type === 'cluster') {
-                        // При клике на синий маркер - приближаем камеру
+                if (d.isCluster) {
+                    el.className = 'dot dot-cluster';
+                    el.innerHTML = d.count;
+                    el.onclick = () => {
                         const pov = world.pointOfView();
-                        world.pointOfView({ lat: d.lat, lng: d.lng, alt: pov.alt * 0.6 }, 600);
-                    } else {
-                        // При клике на город - открываем меню
-                        openCityUI(d, groupKey);
-                    }
-                };
+                        world.pointOfView({ lat: d.lat, lng: d.lng, alt: pov.alt * 0.5 }, 600);
+                    };
+                } else {
+                    el.className = 'dot dot-city';
+                    if (currentActiveGroupKey === groupKey) el.classList.add('dot-active');
+                    el.onclick = () => openCityUI(d, groupKey);
+                }
                 return el;
             });
 
-        // Слушатель изменения камеры для пересчета кластеров
-        world.controls().addEventListener('change', debounce(() => updateVisuals(), 200));
+        // Слушатель зума для пересчета сетки
+        world.controls().addEventListener('change', debounce(() => updateClusters(), 200));
 
-        function debounce(func, wait) {
-            let timeout;
-            return function(...args) {
-                clearTimeout(timeout);
-                timeout = setTimeout(() => func.apply(this, args), wait);
-            };
+        function debounce(f, ms) {
+            let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f.apply(this, a), ms); };
         }
 
-        function getDist(lat1, lon1, lat2, lon2) {
-            return Math.sqrt(Math.pow(lat1 - lat2, 2) + Math.pow(lon1 - lon2, 2));
-        }
-
-        // Логика объединения точек в зависимости от зума
-        function updateVisuals() {
+        // КЛАСТЕРИЗАЦИЯ ПО СЕТКЕ (Grid Clustering)
+        function updateClusters() {
             const alt = world.pointOfView().alt;
-            const clusterRadius = alt * 10; // Чем выше камера, тем больше радиус объединения
-            
-            const clustered = [];
-            const processed = new Set();
+            // Размер ячейки сетки зависит от высоты камеры
+            const gridSize = alt * 5; 
+            const clusters = {};
 
-            for (let i = 0; i < allGroups.length; i++) {
-                if (processed.has(i)) continue;
-                
-                let current = allGroups[i];
-                let neighbors = [i];
-                
-                for (let j = i + 1; j < allGroups.length; j++) {
-                    if (processed.has(j)) continue;
-                    if (getDist(current.lat, current.lng, allGroups[j].lat, allGroups[j].lng) < clusterRadius) {
-                        neighbors.push(j);
-                    }
-                }
+            allGroups.forEach(g => {
+                const latIdx = Math.round(g.lat / gridSize);
+                const lngIdx = Math.round(g.lng / gridSize);
+                const key = `${latIdx}_${lngIdx}`;
 
-                if (neighbors.length > 1) {
-                    // Создаем временный синий маркер-кластер
-                    clustered.push({
-                        ...current,
-                        type: 'cluster',
-                        count: neighbors.length
-                    });
+                if (!clusters[key]) {
+                    clusters[key] = { ...g, count: 1, members: [g] };
                 } else {
-                    clustered.push({
-                        ...current,
-                        type: 'city'
-                    });
+                    clusters[key].count++;
+                    clusters[key].members.push(g);
                 }
-                
-                neighbors.forEach(idx => processed.add(idx));
-            }
-            world.htmlElementsData(clustered);
+            });
+
+            const finalData = Object.values(clusters).map(c => {
+                if (c.count > 1 && alt > 0.5) {
+                    return { ...c, isCluster: true };
+                } else {
+                    // Если в ячейке один город или мы очень близко — показываем города
+                    return c.members.map(m => ({ ...m, isCluster: false }));
+                }
+            }).flat();
+
+            world.htmlElementsData(finalData);
         }
 
         async function backgroundScanner() {
             try {
                 const response = await fetch(`https://de1.api.radio-browser.info/json/stations/search?limit=1000&offset=${offset}&has_geo_info=true&hidebroken=true&order=clickcount&reverse=true`);
                 const data = await response.json();
-                if (!data || data.length === 0) return;
+                if (!data || !data.length) return;
 
                 data.forEach(s => {
-                    const sLat = parseFloat(s.geo_lat), sLng = parseFloat(s.geo_long);
-                    const cityName = s.state || s.country || 'Unknown';
+                    const lat = parseFloat(s.geo_lat), lng = parseFloat(s.geo_long);
+                    const city = s.state || s.country || 'Unknown';
                     
-                    let existingGroup = allGroups.find(g => getDist(sLat, sLng, g.lat, g.lng) < 0.2);
-
-                    if (existingGroup) {
-                        if (!existingGroup.stations.find(st => st.stationuuid === s.stationuuid)) {
-                            existingGroup.stations.push(s);
-                        }
+                    let exist = allGroups.find(g => Math.abs(g.lat - lat) < 0.1 && Math.abs(g.lng - lng) < 0.1);
+                    if (exist) {
+                        if (!exist.stations.find(st => st.stationuuid === s.stationuuid)) exist.stations.push(s);
                     } else {
-                        allGroups.push({
-                            lat: sLat, lng: sLng, city: cityName,
-                            searchTag: (s.state + ' ' + s.country + ' ' + (s.tags || '')).toLowerCase(),
-                            stations: [s]
-                        });
+                        allGroups.push({ lat, lng, city, searchTag: (city + ' ' + (s.tags || '')).toLowerCase(), stations: [s] });
                     }
                 });
 
                 document.getElementById('scanner-info').innerText = `ГОРОДОВ: ${allGroups.length}`;
-                updateVisuals();
+                updateClusters();
                 offset += 1000;
-            } catch (err) { console.error(err); }
+            } catch (e) {}
         }
 
         function renderList(data) {
             const list = document.getElementById('stations-list');
             list.innerHTML = '';
             data.forEach(g => {
-                const groupKey = (g.city + g.lat).toLowerCase();
+                const key = (g.city + g.lat).toLowerCase();
                 const div = document.createElement('div');
-                div.className = `city-group ${currentActiveGroupKey === groupKey ? 'active' : ''}`;
+                div.className = `city-group ${currentActiveGroupKey === key ? 'active' : ''}`;
                 div.innerHTML = `<div class="city-name"><span>${g.city}</span><small>${g.stations.length}</small></div>`;
                 
                 g.stations.forEach(s => {
                     const sDiv = document.createElement('div');
                     sDiv.className = 'station-sub-item';
                     sDiv.innerText = s.name;
-                    sDiv.onclick = (e) => { e.stopPropagation(); play(s, g, groupKey); };
+                    sDiv.onclick = (e) => { e.stopPropagation(); play(s, g, key); };
                     div.appendChild(sDiv);
                 });
                 
                 div.onclick = () => {
-                    const wasActive = div.classList.contains('active');
+                    const active = div.classList.contains('active');
                     document.querySelectorAll('.city-group').forEach(el => el.classList.remove('active'));
-                    if (!wasActive) div.classList.add('active');
+                    if (!active) div.classList.add('active');
                 };
                 list.appendChild(div);
             });
         }
 
-        function openCityUI(d, groupKey) {
-            currentActiveGroupKey = groupKey;
+        function openCityUI(d, key) {
+            currentActiveGroupKey = key;
             world.pointOfView({ lat: d.lat, lng: d.lng, alt: 1.1 }, 600);
-            updateVisuals(); // Чтобы маркер стал оранжевым
+            updateClusters(); 
             
             renderList([d]);
             document.getElementById('side-drawer').classList.add('open');
             
-            // Автоматически разворачиваем список станций выбранного города
             setTimeout(() => {
                 const first = document.querySelector('.city-group');
                 if (first) first.classList.add('active');
-            }, 150);
+            }, 100);
         }
 
-        function play(s, g, groupKey) {
-            currentActiveGroupKey = groupKey;
-            updateVisuals();
+        function play(s, g, key) {
+            currentActiveGroupKey = key;
+            updateClusters();
 
             document.getElementById('status-bar').style.display = 'block';
             document.getElementById('status-city').innerText = g.city;
@@ -263,25 +238,20 @@
             if (window.innerWidth < 600) document.getElementById('side-drawer').classList.remove('open');
         }
 
-        // Интерфейсные события
         document.getElementById('search-input').oninput = (e) => {
-            let val = e.target.value.toLowerCase();
+            const val = e.target.value.toLowerCase();
             const filtered = allGroups.filter(g => g.searchTag.includes(val) || g.city.toLowerCase().includes(val));
             renderList(filtered.slice(0, 50));
         };
 
-        document.getElementById('volume-control').oninput = (e) => { audioPlayer.volume = e.target.value; };
-        
+        document.getElementById('volume-control').oninput = (e) => audioPlayer.volume = e.target.value;
         audioPlayer.ontimeupdate = () => {
-            const m = Math.floor(audioPlayer.currentTime / 60);
-            const s = Math.floor(audioPlayer.currentTime % 60);
+            const m = Math.floor(audioPlayer.currentTime / 60), s = Math.floor(audioPlayer.currentTime % 60);
             document.getElementById('time-display').innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
         };
 
         document.getElementById('menu-btn').onclick = () => {
-            if (!document.getElementById('side-drawer').classList.contains('open')) {
-                renderList(allGroups.slice(0, 100));
-            }
+            if (!document.getElementById('side-drawer').classList.contains('open')) renderList(allGroups.slice(0, 100));
             document.getElementById('side-drawer').classList.toggle('open');
         };
 
