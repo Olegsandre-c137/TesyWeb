@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
+<meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Radio Globe Lite</title>
+<title>Radio Globe Lite + GPT</title>
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://unpkg.com/globe.gl"></script>
@@ -11,271 +11,58 @@
 <style>
 body {
   margin: 0;
-  background: #000;
-  color: #fff;
-  font-family: -apple-system, system-ui, sans-serif;
+  background: black;
   overflow: hidden;
+  font-family: system-ui, sans-serif;
 }
-#scanner-info {
-  position: fixed;
-  top: 15px;
-  right: 15px;
-  background: rgba(0,255,136,0.15);
-  color: #00ff88;
-  padding: 5px 12px;
-  border-radius: 14px;
-  font-size: 10px;
-  font-weight: bold;
-  z-index: 10;
-}
-.station-dot {
+
+.dot {
   width: 7px;
   height: 7px;
   background: #00ff88;
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(0,0,0,0.5);
   cursor: pointer;
 }
-.station-dot.cluster {
-  background: #2aa;
-  width: 10px;
-  height: 10px;
+
+.dot.cluster {
+  width: 11px;
+  height: 11px;
+  background: #00aaff;
 }
-#drawer {
+
+#counter {
   position: fixed;
-  top: 0;
-  left: -280px;
-  width: 260px;
-  height: 100%;
-  background: #0d0d0d;
-  transition: 0.3s;
-  z-index: 20;
-  border-right: 1px solid #333;
+  top: 10px;
+  right: 10px;
+  color: #00ff88;
+  font-size: 11px;
+  background: rgba(0,0,0,0.5);
+  padding: 4px 8px;
+  border-radius: 10px;
+  z-index: 10;
 }
-#drawer.open { left: 0; }
-#drawer h3 {
-  margin: 16px;
-  font-size: 14px;
-}
-#stations {
-  padding: 10px;
-}
-.station {
-  padding: 10px;
-  border-bottom: 1px solid #222;
-  cursor: pointer;
-}
-.station:hover { background: #222; }
 </style>
 </head>
 
 <body>
-
-<div id="scanner-info">ГОРОДОВ: 0</div>
-<div id="globeViz"></div>
-
-<div id="drawer">
-  <h3 id="drawer-title">Город</h3>
-  <div id="stations"></div>
-</div>
-
-<audio id="audio"></audio>
+<div id="counter">ГОРОДОВ: 0</div>
+<div id="globe"></div>
 
 <script>
-/* =========================
-   INIT
-========================= */
 const tg = window.Telegram.WebApp;
 tg.ready(); tg.expand();
 
-const audio = document.getElementById('audio');
-const drawer = document.getElementById('drawer');
-const drawerTitle = document.getElementById('drawer-title');
-const stationsBox = document.getElementById('stations');
-
-let offset = 0;
+/* =====================
+   DATA
+===================== */
 const cities = [];
-const cityMap = new Map(); // key -> city
-let visibleCities = [];
+let visible = [];
 
 const CITY_RADIUS = 0.3; // ~30 км
-const CLUSTER_PX = 24;
+let offset = 0;
 
-/* =========================
+/* =====================
    GLOBE
-========================= */
-const world = Globe()(document.getElementById('globeViz'))
-  .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
-  .backgroundColor('#000')
-  .showAtmosphere(false)
-  .htmlElementsData([])
-  .htmlElement(d => {
-    const el = document.createElement('div');
-    el.className = 'station-dot';
-    if (d.cluster) el.classList.add('cluster');
-
-    el.onclick = () => {
-      if (d.cluster) {
-        world.pointOfView(
-          { lat: d.lat, lng: d.lng, alt: world.pointOfView().alt * 0.6 },
-          600
-        );
-      } else {
-        openCity(d);
-      }
-    };
-    return el;
-  });
-
-world.renderer().setPixelRatio(window.devicePixelRatio);
-world.controls().autoRotate = false;
-
-/* =========================
-   GEO / MATH
-========================= */
-function dist(a, b, c, d) {
-  return Math.sqrt((a - c) ** 2 + (b - d) ** 2);
-}
-
-function isVisible(lat, lng) {
-  const cam = world.camera().position;
-  const phi = lat * Math.PI / 180;
-  const theta = lng * Math.PI / 180;
-  const x = Math.cos(phi) * Math.cos(theta);
-  const y = Math.sin(phi);
-  const z = Math.cos(phi) * Math.sin(theta);
-  return (x * cam.x + y * cam.y + z * cam.z) > 0;
-}
-
-/* =========================
-   CLUSTERING
-========================= */
-function updateVisible() {
-  const map = new Map();
-  const cam = world.camera();
-  const r = world.renderer().domElement;
-
-  cities.forEach(c => {
-    if (!isVisible(c.lat, c.lng)) return;
-
-    const phi = (90 - c.lat) * Math.PI / 180;
-    const theta = (c.lng + 180) * Math.PI / 180;
-
-    const v = new THREE.Vector3(
-      Math.sin(phi) * Math.cos(theta),
-      Math.cos(phi),
-      Math.sin(phi) * Math.sin(theta)
-    );
-
-    v.project(cam);
-
-    const x = (v.x * 0.5 + 0.5) * r.width;
-    const y = (-v.y * 0.5 + 0.5) * r.height;
-
-    const gx = Math.floor(x / CLUSTER_PX);
-    const gy = Math.floor(y / CLUSTER_PX);
-    const key = gx + ':' + gy;
-
-    if (!map.has(key)) {
-      map.set(key, { ...c, cluster: false });
-    } else {
-      map.get(key).cluster = true;
-    }
-  });
-
-  visibleCities = [...map.values()];
-  world.htmlElementsData(visibleCities);
-}
-
-let raf = false;
-world.controls().addEventListener('change', () => {
-  if (raf) return;
-  raf = true;
-  requestAnimationFrame(() => {
-    updateVisible();
-    raf = false;
-  });
-});
-
-/* =========================
-   SCANNER (CITIES ONLY)
-========================= */
-async function scan() {
-  try {
-    const res = await fetch(
-      `https://de1.api.radio-browser.info/json/stations/search?limit=1000&offset=${offset}&has_geo_info=true`
-    );
-    const list = await res.json();
-    if (!list || !list.length) {
-      offset = 0;
-      return;
-    }
-
-    list.forEach(s => {
-      const lat = +s.geo_lat;
-      const lng = +s.geo_long;
-      if (isNaN(lat) || isNaN(lng)) return;
-
-      // проверка: есть ли город рядом
-      for (const c of cities) {
-        if (dist(lat, lng, c.lat, c.lng) < CITY_RADIUS) return;
-      }
-
-      const key = `${Math.round(lat * 10)}_${Math.round(lng * 10)}`;
-      if (cityMap.has(key)) return;
-
-      const city = {
-        lat,
-        lng,
-        name: s.state || s.country || 'Unknown'
-      };
-
-      cityMap.set(key, city);
-      cities.push(city);
-    });
-
-    document.getElementById('scanner-info').innerText =
-      `ГОРОДОВ: ${cities.length}`;
-
-    updateVisible();
-    offset += list.length;
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-scan();
-setInterval(scan, 4000);
-
-/* =========================
-   CITY CLICK → LOAD STATIONS
-========================= */
-async function openCity(city) {
-  drawer.classList.add('open');
-  drawerTitle.innerText = city.name;
-  stationsBox.innerHTML = 'Загрузка...';
-
-  world.pointOfView({ lat: city.lat, lng: city.lng, alt: 1.2 }, 600);
-
-  const res = await fetch(
-    `https://de1.api.radio-browser.info/json/stations/bygeo?lat=${city.lat}&lng=${city.lng}&radius=30`
-  );
-  const list = await res.json();
-
-  stationsBox.innerHTML = '';
-  list.forEach(s => {
-    const div = document.createElement('div');
-    div.className = 'station';
-    div.innerText = s.name;
-    div.onclick = () => {
-      audio.src = s.url_resolved.replace('http://','https://');
-      audio.play();
-    };
-    stationsBox.appendChild(div);
-  });
-}
-</script>
-
-</body>
-</html>
+===================== */
+const globe = Globe()(document.ge
