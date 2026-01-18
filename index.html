@@ -65,4 +65,113 @@ let offset = 0;
 /* =====================
    GLOBE
 ===================== */
-const globe = Globe()(document.ge
+const globe = Globe()(document.getElementById('globe'))
+  .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+  .backgroundColor('#000')
+  .showAtmosphere(false)
+  .htmlElementsData([])
+  .htmlElement(d => {
+    const el = document.createElement('div');
+    el.className = 'dot' + (d.cluster ? ' cluster' : '');
+    el.onclick = () => {
+      if (d.cluster) {
+        globe.pointOfView({
+          lat: d.lat,
+          lng: d.lng,
+          alt: globe.pointOfView().alt * 0.6
+        }, 600);
+      }
+    };
+    return el;
+  });
+
+globe.controls().minDistance = 140;
+globe.controls().maxDistance = 400;
+
+/* =====================
+   GEO HELPERS
+===================== */
+function dist(a, b, c, d) {
+  return Math.sqrt((a - c) ** 2 + (b - d) ** 2);
+}
+
+/* =====================
+   CLUSTERING (SPHERE)
+===================== */
+function rebuildClusters() {
+  const scale = globe.pointOfView().alt;
+  const threshold = CITY_RADIUS * scale * 4;
+
+  const result = [];
+  const used = new Set();
+
+  for (let i = 0; i < cities.length; i++) {
+    if (used.has(i)) continue;
+
+    const base = cities[i];
+    let count = 1;
+
+    for (let j = i + 1; j < cities.length; j++) {
+      if (used.has(j)) continue;
+      if (dist(base.lat, base.lng, cities[j].lat, cities[j].lng) < threshold) {
+        used.add(j);
+        count++;
+      }
+    }
+
+    result.push({
+      lat: base.lat,
+      lng: base.lng,
+      cluster: count > 1
+    });
+  }
+
+  visible = result;
+  globe.htmlElementsData(visible);
+}
+
+globe.controls().addEventListener('change', () => {
+  requestAnimationFrame(rebuildClusters);
+});
+
+/* =====================
+   SCAN STATIONS → CITIES
+===================== */
+async function scan() {
+  try {
+    const res = await fetch(
+      `https://de1.api.radio-browser.info/json/stations/search?limit=500&offset=${offset}&has_geo_info=true`
+    );
+    const list = await res.json();
+    if (!list.length) {
+      offset = 0;
+      return;
+    }
+
+    list.forEach(s => {
+      const lat = +s.geo_lat;
+      const lng = +s.geo_long;
+      if (isNaN(lat) || isNaN(lng)) return;
+
+      for (const c of cities) {
+        if (dist(lat, lng, c.lat, c.lng) < CITY_RADIUS) return;
+      }
+
+      cities.push({ lat, lng });
+    });
+
+    document.getElementById('counter').innerText =
+      `ГОРОДОВ: ${cities.length}`;
+
+    rebuildClusters();
+    offset += list.length;
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+scan();
+setInterval(scan, 4000);
+</script>
+</body>
+</html>
