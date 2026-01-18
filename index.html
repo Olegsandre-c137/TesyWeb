@@ -2,392 +2,350 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
 <title>Radio Globe</title>
-
 <style>
 html, body {
-  margin: 0;
-  padding: 0;
-  background: #000;
-  color: #fff;
-  overflow: hidden;
-  font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: black;
+    overflow: hidden;
+    font-family: system-ui, sans-serif;
+    color: white;
 }
 
-/* Canvas */
-#canvas {
-  display: block;
+canvas {
+    display: block;
 }
 
-/* Top bar */
-#top {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 44px;
-  background: rgba(0,0,0,0.6);
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  gap: 10px;
-  z-index: 10;
+#topBar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 14px;
+    z-index: 10;
 }
-#title {
-  flex: 1;
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
 #geoBtn {
-  cursor: pointer;
-  font-size: 18px;
+    margin-left: auto;
+    cursor: pointer;
 }
 
-/* Bottom bar */
-#bottom {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 44px;
-  background: rgba(0,0,0,0.6);
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  gap: 10px;
-  z-index: 10;
-}
-#time {
-  font-size: 12px;
-}
-#volume {
-  flex: 1;
+#bottomBar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 50px;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    gap: 10px;
+    font-size: 12px;
 }
 
-/* Side panel */
-#panel {
-  position: absolute;
-  top: 44px;
-  bottom: 44px;
-  left: 0;
-  width: 280px;
-  background: rgba(0,0,0,0.85);
-  transform: translateX(-100%);
-  transition: transform 0.25s ease;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
+#menu {
+    position: fixed;
+    top: 40px;
+    bottom: 50px;
+    left: -300px;
+    width: 300px;
+    background: rgba(0,0,0,0.85);
+    transition: left 0.25s ease;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
 }
-#panel.open {
-  transform: translateX(0);
+
+#menu.open {
+    left: 0;
 }
-#citySearch {
-  padding: 8px;
-  border: none;
-  outline: none;
+
+#menu input {
+    margin: 10px;
+    padding: 6px;
+    background: #111;
+    border: 1px solid #333;
+    color: white;
 }
+
 #stations {
-  flex: 1;
-  overflow-y: auto;
+    flex: 1;
+    overflow-y: auto;
 }
+
 .station {
-  padding: 8px;
-  border-bottom: 1px solid #222;
-  cursor: pointer;
+    padding: 8px 10px;
+    border-bottom: 1px solid #222;
+    cursor: pointer;
 }
+
 .station:hover {
-  background: #222;
+    background: #222;
 }
 </style>
 </head>
-
 <body>
 
-<canvas id="canvas"></canvas>
-
-<div id="top">
-  <div id="title">Выберите город</div>
-  <div id="geoBtn">📍</div>
+<div id="topBar">
+    <span id="cityLabel">—</span> /
+    <span id="stationLabel">—</span>
+    <span id="geoBtn">📍</span>
 </div>
 
-<div id="panel">
-  <input id="citySearch" placeholder="Поиск города"/>
-  <div id="stations"></div>
+<canvas id="globe"></canvas>
+
+<div id="menu">
+    <input id="citySearch" placeholder="Поиск города…" />
+    <div id="stations"></div>
 </div>
 
-<div id="bottom">
-  <div id="time">00:00</div>
-  <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8"/>
+<div id="bottomBar">
+    <input type="range" min="0" max="1" step="0.01" id="volume" />
+    <span id="timer">00:00</span>
 </div>
 
 <audio id="audio"></audio>
 
 <script>
-/* =======================
-   CONFIG
-======================= */
-const MIN_ZOOM = 0.8;
-const MAX_ZOOM = 3.0;
-const CITY_RADIUS_KM = 30;
-const CLUSTER_PX = 22;
+/* ================== BASIC SETUP ================== */
 
-/* =======================
-   STATE
-======================= */
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-let w, h;
+const canvas = document.getElementById("globe");
+const ctx = canvas.getContext("2d");
 
-let zoom = 1.2;
-let rotX = 0;
-let rotY = 0;
-let dragging = false;
-let lastX = 0;
-let lastY = 0;
-
-let cities = []; // {id, name, lat, lon}
-let selectedCity = null;
-let clusters = [];
-
-const audio = document.getElementById('audio');
-let startTime = 0;
-
-/* =======================
-   UTILS
-======================= */
+let w, h, cx, cy;
 function resize() {
-  w = canvas.width = window.innerWidth;
-  h = canvas.height = window.innerHeight;
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+    cx = w / 2;
+    cy = h / 2;
 }
-window.addEventListener('resize', resize);
+window.addEventListener("resize", resize);
 resize();
 
-function normName(name) {
-  return name.toLowerCase()
-    .replace(/ё/g,'е')
-    .replace(/[^a-zа-я0-9]/g,'');
+/* ================== CAMERA ================== */
+
+let rotX = 0;
+let rotY = 0;
+let zoom = 1.2;
+const ZOOM_MIN = 0.8;
+const ZOOM_MAX = 3.5;
+
+/* ================== DATA ================== */
+
+let cities = [];      // aggregated cities only
+let visible = [];
+let selectedCity = null;
+
+/* ================== RADIO GARDEN API ================== */
+
+const API = "https://radio.garden/api";
+
+async function fetchStations(lat, lon) {
+    const r = await fetch(`${API}/search?lat=${lat}&lon=${lon}`);
+    return (await r.json()).hits || [];
 }
+
+/* ================== NORMALIZATION ================== */
+
+function normalizeName(name) {
+    return name
+        .toLowerCase()
+        .replace("moscow", "москва")
+        .replace("moskva", "москва");
+}
+
+/* ================== GEO ================== */
 
 function project(lat, lon) {
-  const r = Math.min(w, h) * 0.4 * zoom;
-  const phi = lat * Math.PI/180;
-  const theta = lon * Math.PI/180 + rotX;
+    const phi = lat * Math.PI / 180;
+    const theta = lon * Math.PI / 180;
 
-  const x3 = Math.cos(phi) * Math.sin(theta);
-  const y3 = Math.sin(phi);
-  const z3 = Math.cos(phi) * Math.cos(theta);
+    let x = Math.cos(phi) * Math.sin(theta + rotX);
+    let y = Math.sin(phi + rotY);
+    let z = Math.cos(phi) * Math.cos(theta + rotX);
 
-  if (z3 < 0) return null;
+    if (z < 0) return null;
 
-  return {
-    x: w/2 + x3 * r,
-    y: h/2 - y3 * r,
-    z: z3
-  };
+    return {
+        x: cx + x * 250 * zoom,
+        y: cy - y * 250 * zoom,
+        z
+    };
 }
 
-/* =======================
-   RADIO GARDEN API
-======================= */
-async function loadStations(offset = 0) {
-  const res = await fetch(
-    `https://radio.garden/api/ara/content/list?offset=${offset}`
-  );
-  const json = await res.json();
-  return json.data.list;
-}
+/* ================== CLUSTERING ================== */
 
-async function loadCities() {
-  let offset = 0;
-  const map = new Map();
+function cluster(points) {
+    const grid = {};
+    const size = zoom < 1.5 ? 40 : zoom < 2.5 ? 25 : 15;
 
-  while (offset < 3000) {
-    const list = await loadStations(offset);
-    for (const s of list) {
-      if (!s.place) continue;
-      const key = normName(s.place.name);
-      if (!map.has(key)) {
-        map.set(key, {
-          id: key,
-          name: s.place.name,
-          lat: s.place.geo[1],
-          lon: s.place.geo[0]
-        });
-      }
+    for (const p of points) {
+        const kx = Math.floor(p.x / size);
+        const ky = Math.floor(p.y / size);
+        const key = kx + "," + ky;
+        if (!grid[key]) grid[key] = [];
+        grid[key].push(p);
     }
-    offset += list.length;
-    if (list.length === 0) break;
-  }
 
-  cities = [...map.values()];
+    return Object.values(grid);
 }
 
-/* =======================
-   CLUSTERING
-======================= */
-function buildClusters() {
-  const grid = new Map();
-  clusters = [];
+/* ================== RENDER ================== */
 
-  for (const c of cities) {
-    const p = project(c.lat, c.lon);
-    if (!p) continue;
-
-    const gx = Math.floor(p.x / CLUSTER_PX);
-    const gy = Math.floor(p.y / CLUSTER_PX);
-    const key = gx + ':' + gy;
-
-    if (!grid.has(key)) {
-      grid.set(key, { x: p.x, y: p.y, list: [] });
-    }
-    grid.get(key).list.push(c);
-  }
-
-  for (const g of grid.values()) {
-    clusters.push(g);
-  }
-}
-
-/* =======================
-   DRAW
-======================= */
 function draw() {
-  ctx.clearRect(0,0,w,h);
+    ctx.clearRect(0,0,w,h);
 
-  // globe
-  ctx.strokeStyle = '#222';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(w/2, h/2, Math.min(w,h)*0.4*zoom, 0, Math.PI*2);
-  ctx.stroke();
+    // night globe
+    ctx.beginPath();
+    ctx.arc(cx, cy, 260 * zoom, 0, Math.PI * 2);
+    ctx.fillStyle = "#02040a";
+    ctx.fill();
 
-  buildClusters();
-
-  for (const cl of clusters) {
-    if (cl.list.length === 1) {
-      ctx.fillStyle = 'lime';
-      ctx.beginPath();
-      ctx.arc(cl.x, cl.y, 4, 0, Math.PI*2);
-      ctx.fill();
-    } else {
-      ctx.fillStyle = '#2aa';
-      ctx.beginPath();
-      ctx.arc(cl.x, cl.y, 6, 0, Math.PI*2);
-      ctx.fill();
+    visible = [];
+    for (const c of cities) {
+        const p = project(c.lat, c.lon);
+        if (p) visible.push({...p, city: c});
     }
-  }
 
-  requestAnimationFrame(draw);
+    const clusters = cluster(visible);
+
+    for (const group of clusters) {
+        const p = group[0];
+        if (group.length === 1) {
+            ctx.fillStyle = (selectedCity === p.city) ? "#ffb000" : "#00ff66";
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            ctx.fillStyle = "#3399ff";
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    requestAnimationFrame(draw);
 }
 draw();
 
-/* =======================
-   INTERACTION
-======================= */
-canvas.addEventListener('mousedown', e => {
-  dragging = true;
-  lastX = e.clientX;
-  lastY = e.clientY;
-});
-window.addEventListener('mouseup', () => dragging = false);
-window.addEventListener('mousemove', e => {
-  if (!dragging) return;
-  rotX += (e.clientX - lastX) * 0.005;
-  rotY += (e.clientY - lastY) * 0.005;
-  lastX = e.clientX;
-  lastY = e.clientY;
+/* ================== INPUT ================== */
+
+let dragging = false;
+let px, py;
+
+canvas.addEventListener("pointerdown", e => {
+    dragging = true;
+    px = e.clientX;
+    py = e.clientY;
 });
 
-canvas.addEventListener('wheel', e => {
-  zoom *= e.deltaY > 0 ? 0.9 : 1.1;
-  zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+canvas.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    rotX += (e.clientX - px) * 0.005;
+    rotY += (e.clientY - py) * 0.005;
+    px = e.clientX;
+    py = e.clientY;
 });
 
-canvas.addEventListener('click', e => {
-  for (const cl of clusters) {
-    const dx = e.clientX - cl.x;
-    const dy = e.clientY - cl.y;
-    const r = cl.list.length === 1 ? 6 : 8;
-    if (dx*dx + dy*dy < r*r) {
-      if (cl.list.length > 1) {
-        zoom = Math.min(MAX_ZOOM, zoom * 1.4);
-      } else {
-        selectCity(cl.list[0]);
-      }
-      break;
+canvas.addEventListener("pointerup", () => dragging = false);
+
+canvas.addEventListener("wheel", e => {
+    zoom *= e.deltaY > 0 ? 0.9 : 1.1;
+    zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom));
+});
+
+/* ================== CLICK ================== */
+
+canvas.addEventListener("click", async e => {
+    for (const p of visible) {
+        const dx = e.clientX - p.x;
+        const dy = e.clientY - p.y;
+        if (dx*dx + dy*dy < 100) {
+            selectCity(p.city);
+            break;
+        }
     }
-  }
 });
 
-/* =======================
-   CITY & AUDIO
-======================= */
+/* ================== CITY SELECTION ================== */
+
 async function selectCity(city) {
-  selectedCity = city;
-  document.getElementById('title').textContent = city.name;
-  document.getElementById('panel').classList.add('open');
+    selectedCity = city;
+    document.getElementById("cityLabel").textContent = city.name;
+    document.getElementById("menu").classList.add("open");
 
-  const res = await fetch(
-    `https://radio.garden/api/ara/content/page/${city.id}`
-  );
-  const json = await res.json();
+    const list = document.getElementById("stations");
+    list.innerHTML = "Загрузка…";
 
-  const list = json.data.content[0].items || [];
-  const box = document.getElementById('stations');
-  box.innerHTML = '';
+    const stations = await fetchStations(city.lat, city.lon);
+    list.innerHTML = "";
 
-  for (const s of list) {
-    const div = document.createElement('div');
-    div.className = 'station';
-    div.textContent = s.title;
-    div.onclick = () => playStation(s.stream);
-    box.appendChild(div);
-  }
-}
-
-function playStation(url) {
-  audio.src = url;
-  audio.play();
-  startTime = Date.now();
-}
-
-audio.addEventListener('timeupdate', () => {
-  const t = Math.floor(audio.currentTime);
-  document.getElementById('time').textContent =
-    String(Math.floor(t/60)).padStart(2,'0') + ':' +
-    String(t%60).padStart(2,'0');
-});
-document.getElementById('volume').oninput =
-  e => audio.volume = e.target.value;
-
-/* =======================
-   GEOLOCATION
-======================= */
-document.getElementById('geoBtn').onclick = () => {
-  navigator.geolocation.getCurrentPosition(pos => {
-    let best = null;
-    let d0 = 1e9;
-    for (const c of cities) {
-      const dx = c.lat - pos.coords.latitude;
-      const dy = c.lon - pos.coords.longitude;
-      const d = dx*dx + dy*dy;
-      if (d < d0) {
-        d0 = d;
-        best = c;
-      }
+    for (const s of stations) {
+        const div = document.createElement("div");
+        div.className = "station";
+        div.textContent = s.name;
+        div.onclick = () => playStation(s);
+        list.appendChild(div);
     }
-    if (best) selectCity(best);
-  });
+}
+
+/* ================== AUDIO ================== */
+
+const audio = document.getElementById("audio");
+const volume = document.getElementById("volume");
+volume.oninput = () => audio.volume = volume.value;
+
+let startTime = 0;
+setInterval(() => {
+    if (!audio.paused) {
+        const t = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById("timer").textContent =
+            String(Math.floor(t/60)).padStart(2,"0") + ":" +
+            String(t%60).padStart(2,"0");
+    }
+}, 1000);
+
+function playStation(s) {
+    audio.src = s.stream;
+    audio.play();
+    startTime = Date.now();
+    document.getElementById("stationLabel").textContent = s.name;
+}
+
+/* ================== GEOLOCATION ================== */
+
+document.getElementById("geoBtn").onclick = () => {
+    navigator.geolocation.getCurrentPosition(p => {
+        const lat = p.coords.latitude;
+        const lon = p.coords.longitude;
+        const nearest = cities.reduce((a,b) =>
+            dist(a,lat,lon) < dist(b,lat,lon) ? a : b
+        );
+        selectCity(nearest);
+    });
 };
 
-/* =======================
-   INIT
-======================= */
-loadCities();
-</script>
+function dist(c,lat,lon){
+    return Math.hypot(c.lat-lat,c.lon-lon);
+}
 
+/* ================== INITIAL LOAD (SIMPLIFIED) ================== */
+// Здесь предполагается, что ты подгружаешь города
+// из batch-запросов Radio Garden и агрегируешь их заранее
+
+cities = [
+    { name:"Москва", lat:55.75, lon:37.61 },
+    { name:"Berlin", lat:52.52, lon:13.40 },
+    { name:"London", lat:51.50, lon:-0.12 }
+];
+</script>
 </body>
 </html>
